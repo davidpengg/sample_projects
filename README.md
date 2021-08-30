@@ -1,4 +1,4 @@
-# my_projects
+# sample_projects
 
 This repo features various projects made by David Peng.
 
