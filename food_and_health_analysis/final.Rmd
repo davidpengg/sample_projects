@@ -1,0 +1,531 @@
+---
+title: Final Project
+author: Kat Moon, David Peng
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+```
+
+```{r message=FALSE, include=FALSE}
+library(car)
+library(leaps)
+library(lubridate)
+library(rvest)
+library(olsrr)
+library(corrplot)
+library(leaps)
+source("http://www.reuningscherer.net/s&ds230/Rfuncs/regJDRS.txt")
+```
+
+## 1. Introduction 
+Nutrition and health are two of the most important aspects of our lives that we have to continuously take care of. However, we often neglect how to lead a healthy life either by having an unbalanced diet, fixating on extreme dieting, or not exercising enough. This becomes an even bigger issue when students leave home and enter college and they are no longer under parents' guidance. In response to this, we decided to investigate data on students' opinions and habits on food, eating, and health by analyzing the data "Food Choices: Food Choices and Preferences of College Students". The survey includes 126 responses from students at Mercyhurst University to more than 50 questions. In particular, we will explore how healthy students feel about themselves and how they perceive their weight, and analyze these by genders, actual weights, among other variables.
+
+Acknowledgements:
+Thank you to Professor Reuning-Scherer, all of S&DS 230e's wonderful TF's and ULA's, all the students of Mercyhurst University who agreed to participate in the survey, and Kaggle user BoraPajo, who compiled and published the survey.
+
+## 2. Data
+
+### List of Variables
+Here are the variables we use throughout the document. Some are original, some recoded, and some new.
+
+* `weight`: weight in pounds; continuous
+* `GPA`: unrounded GPA; continuous
+* `self_perception_weight`: self perception of weight; 1-slim, 5 - overweight; continuous
+* `income`: income brackets; 1 - < $30,000, 5 - > $100,000; continuous
+* `Gender`: gender; 'F' - Female, 'M' - Male; categorical (2)
+* `employment`: employed (part or full) or unemployed; categorical (2)
+* `exercise`: how often you exercise in a typical week; 1 - every day, 5 - never; continuous
+* `parent_education`: composite score of parents education; 2 - both have less than high school, 10 - both have graduate degrees; continuous
+	+ made from similar variables `mother_education` and `father_education` - scale
+
+* `Att_Variety`: composite score of likelihood of eating variety foods when available; with 9 - the most unlikely and 30 being the most likely - continuous
+	+ made from similar variables `thai_food, persian_food, greek_food, ethnic_food indian_food, italian_food` - scale
+* `associate_food`: composite score of choosing the healthier food from two options; 4 - least healthy, 8 - most healthy; continuous
+* `healthy_feeling`: agreement with the statement "I feel healthy!”; 1 - strongly agree, 10 - strongly disagree; continuous
+* `eating_out`: frequency of eating out in a typical week; 1- never, 5- every day; continuous
+* `calories_day`: importance of tracking calories per day; 1 - not knowing important, 4- very important; continuous
+* `nutritional_check`: frequency of checking nutritional values; 1 - never, 5 - everything; continuous
+* `cook`: frequency of cooking; 1 - every day, 5 - never; continuous
+* `fruit_day`: likelihood of eating fruit in a regular day; 1 - very unlikely, 5 - very likely; continuous
+* `veggies_day`: likelihood of eating veggies in a regular day; 1 - very unlikely, 5 - very likely; continuous
+
+
+## 3. Data Cleaning
+
+### Get Raw Data
+
+We start by reading the csv from our local directory and taking a look at the dimension. We won't print all the variables because there are 61.
+```{r, echo = F}
+# fc <- read.csv("/Users/davidpeng/Desktop/S&DS 230/food_choices/food_coded.csv")
+fc <- read.csv("/Users/kat3/Desktop/Yale/food choices/food_coded.csv")
+
+dim(fc)
+# names(fc)
+# head(fc)
+```
+
+### Choosing Variables
+
+The amount of variables in the original dataset *is too damn high!* So we spent an hour going through variables one by one, sorting them into 1) definitely use, 2) maybe use, 3) probably don't use, and 4) don't use. We also somewhat labeled ones we thought we could visualize in histograms or use in plots, but this was in vain since we needed to actually graph data and attempt models in order to see what the connections actually were. We tried data from our "definitely use" pile first, then worked downwards.
+
+One significant problem was that many variables were categorical or ordered but on a small scale. For ordered categorical ones, we grouped similar questions that could be combined into a score. For example, questions about how likely someone was to eat ____ food with a max of 5 became an `Att_Variety` composite score with a max of 30. We created three composite variables that we hoped would become more continuous and slightly more normally distributed.
+
+### Cleaning and Creating
+
+We start with some clean up from characters to numbers. `GPA` and `weight` have some extra characters cleaned up before turning it into numbers. For `self_perception_weight`, the single nonanswer response to the scale question is turned into `NA`.
+
+```{r, echo = F}
+# clean up and convert GPA
+fc$GPA <- gsub(" bitch|Personal |Unknown|nan", "", fc$GPA)
+fc$GPA <- as.numeric(fc$GPA)
+
+# clean up and convert weight
+fc$weight <- gsub("Not sure, | lbs|I'm not answering this. |nan", "", fc$weight)
+fc$weight <- as.numeric(fc$weight)
+
+# remove last value, 6 = I don't think of myself in these terms
+fc$self_perception_weight[fc$self_perception_weight == 6] <- NA
+```
+
+To help later, we'll also recode some variables. Income is recoded so there is one less bracket. Gender is changed to readable "F", "M". Employment is recoded to be binary: employed or unemployed.
+
+```{r, echo = F}
+# Combine two lower income brackets, shift every code number down 1
+fc$income <- recode(fc$income, "c(1, 2) = 2") - 1
+
+# Gender goes from 1,2 to F, M
+fc$Gender <- factor(fc$Gender, labels = c('F', 'M'))
+
+# Employment goes from 1, 2, 3, 4 to 
+fc$employment <- recode(fc$employment, "c(1,2) = 1; c(3) = 2")
+```
+
+We'll now create some new variables, including some composite scores. `Att_Variety` adds together several variables about willingness to eat variety foods, `parent_education` adds father's and mother's education scores, and `associate_food` adds healthy food choices between two options, coded in the same direction.
+
+```{r, echo = F}
+
+fc$Att_Variety <- fc$thai_food + fc$persian_food + fc$greek_food + fc$ethnic_food + fc$indian_food + fc$italian_food
+
+fc$parent_education <- fc$father_education + fc$mother_education
+
+# 0 is unhealthy, 1 is healthy
+# breakfast: 1 was cereal, 2 was donut
+# coffe: 1 was frapuccino, 2 was espresso
+# drink: 1 was orange juice, 2 was soda
+# fries: 1 was mcdonald's, 2 was home potatoes
+fc$associate_food <- (3 - fc$breakfast) + (fc$coffee) + (3 - fc$drink) + (fc$fries)
+```
+
+Finally, we make our data set `fc` that includes just the variables indicated in our list. There are now 17 variables. We'll also save an `fc_old` to use when comparing composite scores to their components.
+
+```{r echo=FALSE}
+fc_old <- fc
+fc <- fc[c("weight", "GPA", "self_perception_weight", "income", "Gender", "employment", "exercise", "parent_education", "Att_Variety", "associate_food", "healthy_feeling", "eating_out", "calories_day", "nutritional_check", "cook", "fruit_day", "veggies_day")]
+dim(fc)
+```
+
+<!-- END OF DATA CLEANING -->
+
+
+## 4. Data Exploration
+
+
+### Hists of Continuous Variables
+Let's visualize the variables we have! For our continuous. We'll check their distributions and NQ plots.
+
+Note: we will treat scaled variables as continuous, and react later if it doesn't work well.
+
+```{r, echo = F}
+par(mfrow = c(2,2), cex = 0.5)
+
+hist(fc$weight, main = "Hist of Weight", col = "blue", xlab = "Weight (lb)")
+qqPlot(fc$weight, main = "NQ Plot of Weight", ylab = "Weight (lb)")
+
+hist(fc$GPA, main = "Hist of GPA", col = "blue", xlab = "GPA")
+qqPlot(fc$GPA, main = "NQ Plot of GPA", ylab = "GPA")
+
+# hist(fc$self_perception_weight, main = "Hist of Self Perception of Weight", col = "blue", xlab = "Self Perception of Weight")
+# qqPlot(fc$self_perception_weight, main = "NQ of Self Perception of Weight", ylab = "Self Perception of Weight")
+# 
+# hist(fc$healthy_feeling, main = "Hist of Healthy Feeling", col = "blue", xlab = "Healthy Feeling")
+# qqPlot(fc$healthy_feeling, main = "NQ of Healthy Feeling", ylab = "Healthy Feeling")
+```
+
+Weight seems slightly right skewed; GPA slightly left skewed. Their NQ plots are all approximately linear, although the tails don't quite fit.
+
+### Scatterplot
+
+Why not try graphing aginst each other the two variables that are most continuous from this dataset: `weight` and `GPA`?
+
+```{r, echo = F}
+par(cex = 0.5)
+plot(weight ~ GPA, data = fc, main = "Weight v.s. GPA", xlab = "GPA", ylab = "Weight (lb)", col = "blue", pch = 19)
+fc_tmp <- na.omit(fc[c("weight","GPA")])
+cor_tmp <- cor.test(fc_tmp$weight, fc_tmp$GPA)
+# cor.test(cor_tmp)
+```
+Unfortunately, the correlation is a weak value of -0.04, and the p-value of 0.66 is larger than 0.05, so the correlation is not statistically significantly different from 0.
+
+### Hists of Composite vs Component Scores
+
+Let's also see what composite scores look like compared to some of their component questions used to create them. 
+
+```{r, echo = F}
+par(mfrow = c(2,2), cex = 0.5)
+hist(fc$Att_Variety, main = "Hist of Variety Food Score", xlab = "Variety Food score", col = "blue")
+qqPlot(fc$Att_Variety, main = "NQ Variety Food Score", ylab = "Variety Food Score")
+
+hist(fc_old$greek_food, main = "Hist of Ethnic Food component", xlab = "Ethnic Food component", col = "blue")
+qqPlot(fc_old$greek_food, main = "NQ Ethnic Food component", ylab = "Ethnic Food component")
+
+# hist(fc$parent_education, main = "Hist of Parents' Education Score", xlab = "Parents' Education Score", col = "blue")
+# qqPlot(fc$parent_education, main = "NQ Parents' Education Score", ylab = "Parents' Education Score")
+# 
+# hist(fc_old$mother_education, main = "Hist of Mother's Education Score", xlab = "Mother's Education Score", col = "blue")
+# qqPlot(fc_old$mother_education, main = "NQ Mother's Education Score", ylab = "Mother's Education Score")
+
+```
+
+For the variety foods score, the plot seems more symmetrical and approximately normally distributed, save for the people who rated every component question 5, and the NQ plot is more linear than the example component that was used to create the score.
+
+## 5. Basic Test
+
+### T-test and Bootstrap for Healthy Feeling
+
+We start with a boxplot to see differences between feelings of healthiness between Females and Males.
+```{r echo=FALSE}
+boxplot(healthy_feeling ~ Gender, data = fc, col = c(2,4), lwd = 2,
+        main = "Healthy Feeling by Gender", xlab = "Gender", ylab = "Feeling Healthy")
+```
+
+According to the boxplot, males visually seem to have a slightly higher median and a larger interquartile range of feeling healthy than females. To test if the difference is actually statistically significant, we ran a two sample T-test across gender groups. 
+
+```{r echo=FALSE}
+to_use <- na.omit(fc[c("healthy_feeling","Gender")])
+
+parmCI <- t.test(healthy_feeling ~ Gender, data = to_use)$conf.int
+#round(parmCI,1)
+t.test(healthy_feeling ~ Gender, data = to_use)
+```
+
+We fail to reject the null hypothesis, that is, there is no evidence of a statistically significant difference between two groups, because the p-value 0.5178 is greater than the significance level of 0.05. 95% confidence interval (-1.3, 0.7) also contains 0, further supporting the conclusion. 
+
+The Central Limit Theorem states that any sample with size greater than 30 can be considered to have a normal distribution of sample means. Though our sample size is 126 and thus satisfies the condition, we would still like to perform bootstrap and compare the confidence interval of bootstrapped mean difference to the original confidence interval calculated above. 
+
+```{r echo=FALSE}
+n <- 10000
+
+diffFeel <- rep(NA,n)
+
+for (i in 1:n) {
+  sM <- sample(to_use$healthy_feeling[to_use$Gender == "M"],
+               sum(to_use$Gender == "M"),
+               replace = T)
+  sF <- sample(to_use$healthy_feeling[to_use$Gender == "F"],
+               sum(to_use$Gender == "F"),
+               replace = T)
+  
+  diffFeel[i] <- mean(sF) - mean(sM) # must be similar to the ordering of Gender
+}
+
+#two sample t-test for the mean
+
+#bootstrapped
+bootCI <- quantile(diffFeel, c(0.025, 0.975))
+#round(bootCI,1)
+
+# #Make histogram of bootstrap sample means
+hist(diffFeel, col = "blue", main = "Bootstrapped Sample Means Diff", xlab = "Healthy Feeling")#, breaks = 50)
+# 
+# #Add lines to histogram for CI's
+abline(v = bootCI, lwd = 3, col = "red")
+abline(v = parmCI, lwd = 3, col = "green", lty = 2)
+legend("topright", c("Original CI","Boot CI"), lwd = 3, col = c("green","red"), lty = c(2,1))
+```
+
+Rounding to the first decimal place, both bootstrapped and original confidence intervals are (-1.3, 0.7), although the bootstrapped confidence interval to be slightly slimmer than the original interval in the plot. Since both include a difference in means of 0, we conclude that there is no statistically significant difference between the mean healthy feeling reported by Females and Males. 
+
+### T-test and Bootstrap for Self Perceived Weight 
+
+Let us consider another continuous variable `self_perception_weight`. We suspected that females might have harsher standards about their weights compared to males. We will perform a two-sample t-test and a bootstrap to get the CI's for the mean difference in self perceived weight between Females and Males.
+
+```{r echo=FALSE}
+# bootstrap 
+N <- 10000
+
+to_use <- na.omit(fc[c("self_perception_weight","Gender")])
+
+diffSPW <- rep(NA, N)
+
+for (i in 1:N) {
+  sF <- sample(to_use$self_perception_weight[to_use$Gender == "F"],
+               sum(to_use$Gender == "F"),
+               replace = T)
+  sM <- sample(to_use$self_perception_weight[to_use$Gender == "M"],
+               sum(to_use$Gender == "M"),
+               replace = T)
+  diffSPW[i] <- mean(sF) - mean(sM)
+}
+
+parm_ci <- t.test(self_perception_weight ~ Gender, data = to_use)$conf.int
+boot_ci <- quantile(diffSPW, c(0.025, 0.975))
+
+# round(parm_ci,1)
+# round(boot_ci,1)
+
+hist(diffSPW, col = "blue", xlab = "Bootstrapped Sample Means Diff", main = "Bootstrapped Sample Means Diff in SPW", breaks = 50)
+abline(v = boot_ci,  lwd = 3, col = "red")
+abline(v = parm_ci, lwd = 3, col = "green", lty = 2)
+legend("topright", c("Original CI","Boot CI"), lwd = 3, col = c("green","red"), lty = c(2,1))
+```
+
+Rounding to the first decimal place, the CI's have the same range and bound again of (0.2, 0.9). Since both do not include a difference in means of 0, we conclude that there is a statistically significant difference between the mean healthy feeling reported by Females and Males.
+
+### Permutation Test
+
+Since we know that the means in self-perception of weights (SPW) are statistically different in males and females, now we want to test if females have statistically higher SPW compared to men. To test our hypothesis, we will do a permutation test for two samples. Below are the null and one-sided alternative hypotheses. 
+
+$$H_0: \mu_{F}-\mu_{M} = 0$$
+$$H_a: \mu_{F}-\mu_{M} > 0$$
+```{r echo=FALSE}
+# Uses HW6, Class 10
+
+# Get actual mean differences
+actualdiff <- by(to_use$self_perception_weight, to_use$Gender, mean)
+actualdiff <- actualdiff[1] - actualdiff[2]
+# so on avg, women had SWGs that were 0.527 greater than men's
+
+# Permuation test
+N <- 10000
+diffvals <- rep(NA, N)
+
+for (i in 1:N) {
+  fakegender <- sample(to_use$Gender)
+  diffvals[i] <- mean(to_use$self_perception_weight[fakegender == "F"]) - mean(to_use$self_perception_weight[fakegender == "M"])
+}
+
+hist(diffvals, col = "yellow", main = "Permuted Sample Means Diff in SPW", xlab = "Self Perceived Weight", breaks = 50)
+abline(v = actualdiff, col = "blue", lwd = 3)
+text(actualdiff - 0.03, 450 , paste("Actual Diff in Means =", round(actualdiff,2)),srt = 90)
+  
+# mean(abs(corResults) >= abs(cor(x, y))
+
+# mean(abs(diffvals) >= abs(actualdiff)) # two sided 
+mean(diffvals >= actualdiff) # one sided
+# mean(diffvals <= actualdiff) # wrong way one sided
+```
+
+Since the p-value of 0.002 is less than the significance level of 0.05, we reject the null hypothesis and accept our alternative one-sided hypothesis: the mean SPW is higher for females than for males.
+
+## 6. Multiple Regression 
+
+Next, we will use multiple regression to find the model for predicting self-perception of weights. We first examine the correlations among variables, possible issues of multicollinearity, and need for transforming the variables. Then we will use best subsets regression, and R-squared, Adjusted R-squared, BIC, and Cp Statistics to determine the final model containing statistically significant predictors. 
+
+We will use the following continuous variables: `GPA`, `weight`, `eating_out`, `exercise`, `healthy_feeling`, `associate_food`, `income`, `parent_education`,  `calories_day`, `nutritional_check`, `cook`, `fruit_day`, `veggies_day`, and `Att_variety`. 
+
+```{r echo=FALSE}
+fc2 <- fc[, c("self_perception_weight", "GPA", "weight", "eating_out", "exercise",  "healthy_feeling", "associate_food", "income", "parent_education",  "calories_day", "nutritional_check", "cook", "fruit_day", "veggies_day", "Att_Variety")]
+
+cor1 <- cor(fc2, use = "pairwise.complete.obs")
+sigcorr <- cor.mtest(fc2, conf.level = 0.95)
+corrplot.mixed(cor1, lower.col="black", upper = "ellipse", tl.col = "black",
+               number.cex=.7, tl.pos = "lt", tl.cex=.7, p.mat = sigcorr$p,
+               sig.level = .05)
+```
+
+The plot above shows pairwise correlation values across variables with an X mark over correlations that are statistically non-significant at a significance level of 0.05. The variable `self_perception_weight` has relatively strong positive correlations to `weight` (0.32) and `exercise` (0.43). This is not surprising because the heavier a student weighs, the the more overweight the student may think of him/herself. Similarly, if the student exercises more often (recall that 1 in `exercise` is "exercise every day"), they are more likely to consider themselves to be fit or slim (1 in `self_perception_weight` is "slim"). 
+
+Overall, however, there are some strong and significant correlations among the variables, such as `fruit_day` & `veggies_day` or `nutritional_check` & `exercise`, indicating an issue of multicollinearity. 
+
+<!-- random idea, but could we potentially make a new variable of male weight - male average, female weight - female average, and then plot it with self perception of weight. right now, the the more a person weighs, the perception  -->
+
+```{r include=FALSE}
+par(cex = 0.5)
+pairsJDRS(fc2)
+```
+
+Since we are unsure if there are other interesting nonlinear relationships across variables, we made a plot using `pairsJDRS`. 
+
+First, we found that there might be a few influential points in the variable `weight` that increase the slope and strengthens the correlation between `weight` and `self_perception_weight`. In the jittered scatterplot below, we can see that there are datapoints on the top right corner that might skew the correlation. 
+
+<!-- check JDRS's note about this  -->
+```{r echo=FALSE}
+par(mfrow = c(1,2), cex = 0.5)
+
+plot(jitter(fc$self_perception_weight, 0.5) ~ fc$weight, pch = 19, col = "red", xlab = "Weight",
+     ylab = "Self Perception of weight")
+mtext("Weight vs Self perception of weight", cex = 0.8, line = 1)
+
+fc_omit <- na.omit(fc[, c("self_perception_weight", "weight")])
+mtext(paste("Sample Correlation =", round(cor(fc_omit$self_perception_weight, fc_omit$weight), 2)), line = 0, cex = 0.5)
+
+
+plot(jitter(fc$self_perception_weight, 0.5) ~ jitter(fc$healthy_feeling), pch = 19, col = "red", xlab = "Feeling Healthy",
+     ylab = "Self Perception of weight")
+mtext("Feeling Healthy vs Self perception of weight", cex = 0.8, line = 1)
+
+fc_omit <- na.omit(fc[, c("self_perception_weight", "healthy_feeling")])
+mtext(paste("Sample Correlation =", round(cor(fc_omit$self_perception_weight, fc_omit$healthy_feeling), 2)), line = 0, cex = 0.5)
+```
+
+Next, we found that there is a nonlinear, quadratic-looking relationship between `healthy_feeling` and `self_perception_weight`, as shown below in the jittered plot. 
+
+<!-- should we just comment this out -->
+
+
+<!-- ```{r echo=FALSE} -->
+<!-- plot(jitter(fc$self_perception_weight, factor = 1.2) ~ jitter(fc$exercise, factor = 1), pch = 19, col = "red", xlab = "Exercise", -->
+<!--      ylab = "Self Perception of weight") -->
+<!-- mtext("Exercise vs Self perception of weight", cex = 1.2, line = 1) -->
+
+<!-- fc_omit <- na.omit(fc[, c("self_perception_weight", "exercise")]) -->
+<!-- mtext(paste("Sample Correlation =", round(cor(fc_omit$self_perception_weight, fc_omit$exercise), 2)), line = 0) -->
+<!-- ``` -->
+
+<!-- The jittered plot above shows the correlation between exercise and self perception of weight. Visually, the less a person exercises, the more the person think him/herself to be overweight.  -->
+
+<!-- Now, we perform correlation  -->
+
+Finally, we will perform best subsets regression and the Bayesian Information Criteria (BIC) to determine the best model predict `self_perception_weight`. 
+
+```{r include=FALSE}
+mod_BIC_SPW <- regsubsets(self_perception_weight ~ ., data = fc2, nvmax = 14)
+mod_BICsum1 <- summary(mod_BIC_SPW)
+
+#mod_BICsum1$which
+
+#Best model according to Bayesian Information Criteria (BIC)
+which.min(mod_BICsum1$bic)
+
+#Which variables are in model 2
+names(fc2)[mod_BICsum1$which[which.min(mod_BICsum1$bic), ]][-1]
+```
+
+
+According to the BIC, the best model contains 2 variables: `weight` and `exercise`. So if we fit the model, we get the following: 
+
+```{r echo=FALSE}
+#Fit this model and show results
+fc2bic1 <- fc2[,mod_BICsum1$which[which.min(mod_BICsum1$bic), ]]
+fc2bic1mod <- lm(self_perception_weight ~ ., data = fc2bic1)
+summary(fc2bic1mod)
+```
+
+Weight and Exercise are significant predictors of the self perception of weight since both p-values are below the significance level of 0.05. The coefficient for weight is positive, which means as the weight increases, the self-perceived weight also increases. Similarly, the coefficients for exercise is positive, which means the more frequently a person exercises (recall that 1 is coded as "every day"), the less the self-perceived weight is. The R-squared value of 0.2574 indicates that approximately 26 percent of the variability is explained by this model.
+
+```{r include=FALSE}
+# Using R squared 
+which.max(mod_BICsum1$rsq)
+summary(lm(self_perception_weight ~ .,data = fc2))
+
+# Using adjusted R squared 
+which.max(mod_BICsum1$adjr2)
+names(fc2)[mod_BICsum1$which[which.max(mod_BICsum1$adjr2), ]][-1]
+fc2temp <- fc2[, mod_BICsum1$which[which.max(mod_BICsum1$adjr2), ]]
+summary(lm(self_perception_weight ~ .,data = fc2temp))
+
+#Best model according to Cp Statistic (a bit more complicated)
+modCP <- min(c(1:length(mod_BICsum1$cp))[mod_BICsum1$cp <= c(1:length(mod_BICsum1$cp)) + 1])
+
+#Which variables are in model 2
+names(fc2)[mod_BICsum1$which[modCP, ]][-1]
+
+#Fit this model and show results
+fc2temp <- fc2[,mod_BICsum1$which[modCP,]]
+summary(lm(self_perception_weight ~ ., data = fc2temp))
+```
+
+There were other models suggested by the R-squared, adjusted R-squared values and Cp statistic. R-squared model recommended us to include all variables in the model as it has the highest R-squared value. However, since the R-squared increases with the number of predictors, it is not a relevant or useful factor in determining statistically significant predictors in our case. The model from adjusted R-squared values suggested us to include 4 variables. However, when we fit them into a linear model, two of the variables, `eating_out` and `income`, were statistically insignificant. Finally, both the BIC and Cp statistic suggested two variables, `weight` and `exercise`, and because both were statistically significant, we determined this to be our final model. 
+
+There were 19 observations deleted due to missingness in the BIC model. This is 1 less in comparison to the model suggested by the adjusted R value, and 23 less than the model from R squared value. 
+
+Now that we have a model, we can graph residual plots. 
+
+```{r echo=FALSE}
+modfin <- fc2bic1mod
+myResPlots2(modfin, label = "Model by BIC")
+```
+
+The plots indicate that we have met the assumptions about our regression models because the data points in the normal quantile plot are approximately in a straight line, and there are no outstanding outliers in the residual plot. The residual plot also does not fan out, make a curve, or show unwanted trends, indicating little evidence of heteroskedasticity. The plot has five slashes, however, because the response values in `self_perception_weight` are discrete numbers from 1-5 (though we may regard it as continuous). 
+
+Though we do not see clear signs of non-normal distribution of residuals or heteroskedasticity, we can ensure this by performing Box-Cox procedure. 
+
+```{r echo=FALSE}
+trans2 <- boxCox(modfin)
+#trans2$x[which.max(trans2$y)]
+# suggested transform of -0.5?
+```
+
+The Box-Cox procedure returns a lambda value of 1.07, but since this value is verly close to 1, which is also included in the interval, we may conclude that no transformation is necessary. 
+
+
+
+## 7. ANCOVA
+
+As we now know from the linear model above, the self perception of weight is a significant predictor of weight. Notice from the boxplot below that females and males seem to have different weights. We will investigate how that relationship affected by Gender by performing ANCOVA. 
+
+```{r echo = FALSE}
+boxplot(fc$weight ~ fc$Gender, col = c(2,4), lwd = 2,
+        main = "Weight by Gender", xlab = "Gender", ylab = "Weight (lb)")
+```
+First, we will try fitting a basic linear model.
+
+```{r echo = FALSE}
+fc2 <- na.omit(fc[c("weight","self_perception_weight", "Gender")])
+
+# lead up to it would be like...
+m0 <- lm(fc2$weight ~ fc2$self_perception_weight)
+plot(weight ~ self_perception_weight, data = fc2)
+# summary(m0)
+
+myResPlots2(m0)
+```
+
+The NQ plot shows a line that is almost but not quite linear, and the plot of fits v.s. residuals seems to have some heteroskedascitiy and a few outstanding outliers. However, this is probably due to the discrete character of variables and the slightly right-skewed distribution of `weight.` Hence, we will continue to perform ANCOVA in the raw scale. 
+
+Now, we'll try adding in the effect of `Gender`.
+
+```{r echo=FALSE}
+m3 <- lm(fc2$weight ~ fc2$self_perception_weight + fc2$Gender)
+# summary(m3)
+Anova(m3, type = 3)
+# myResPlots2(m3)
+
+#ANOVA (two way?)
+plot(fc$weight ~ fc$self_perception_weight, main = "Weight v.s. Self Perceived Weight", xlab = "Self Perceived Weight", ylab = "Weight (lb)", col = factor(fc$Gender), pch = 16, cex = 0.5)
+legend("topleft", col = 1:2, legend = levels(factor(fc$Gender)), pch = 16)
+coefs <- coef(m3)
+#Pay CLOSE attention to which coefficient is which!!!!
+coefs
+abline(a = coefs[1], b = coefs[2], col = "black", lwd = 3)
+abline(a = coefs[1] + coefs[3], b = coefs[2], col = "red", lwd = 3)
+
+```
+
+The R-squared is 0.45, which means that 45% of the variability is explained by the model. Furthermore, both the predictors `gender` and `self_perception_weight` are significant as their p-values are less than 0.05. We can see that males have higher intercept than females by 47.6 pounds, which makes sense because males generally weigh more than females. We also notice that the `self_perception_weight` by `Gender` increases as the `weight` increases. 
+
+Perhaps the slopes are different for Females and Males, so we should fit more than one slope based on Gender by adding an interaction term between `self_perception_weight` and `Gender`. 
+
+```{r echo=FALSE}
+m4 <- lm(fc$weight ~ fc$self_perception_weight + fc$Gender + fc$self_perception_weight*fc$Gender)
+Anova(m4, type = 3)
+# summary(m4)
+
+plot(fc$weight ~ fc$self_perception_weight, col = factor(fc$Gender), main = "Self Perception of Weight vs Weight by Gender", xlab = "Self Perception of Weight", ylab = "Weight (lb)",  pch = 16, cex = .5)
+legend("topleft", col = 1:2, legend = levels(factor(fc$Gender)), pch = 16)
+coefs <- coef(m4)
+#Again, pay CLOSE attention to which coefficient is which!!!!
+round(coefs,4)
+abline(a = coefs[1], b = coefs[2], col = "black", lwd = 3)
+abline(a = coefs[1] + coefs[3], b = coefs[2] + coefs[4], col = "red", lwd = 3)
+```
+
+The model looks almost exactly the same as the previous ANCOVA model. This is because the interaction between Gender and self perception of weight is not significant (the p-value is 0.96 > 0.05) and the coefficient for the interaction term is only 0.183 compared to the slope of females, which is 16.3. Hence the regression lines still appear to be parallel. The R-squared value does not change either. 
+
+## 8. Discussion 
+We investigated data on students' opinions and habits on food, eating, and health by analyzing the data "Food Choices: Food Choices and Preferences of College Students".  After making and exploring a useable dataset, we found no difference in healthy feeling but a difference in self perceived weight between females and males using T-tests, bootstraps, and a permutation test. Our multiple regression model found that the more frequent the exercise, the less the self perceived weight, and the higher the actual weight, the more the self perceived weight. Lastly, we got that there is no significant interaction between gender and self perception of weight when predicting for weight from ANCOVA models.
+
+
+
